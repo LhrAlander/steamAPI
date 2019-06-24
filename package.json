@@ -1,0 +1,19 @@
+{
+  "name": "steam",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^0.19.0",
+    "axios-https-proxy-fix": "^0.17.1",
+    "python-struct": "^1.0.6",
+    "request": "^2.88.0",
+    "tunnel": "0.0.6"
+  }
+}
