@@ -45,7 +45,7 @@ export default class Steam {
 	private secretKey: string
 	private cookie: { [key: string]: string }
 	private options: ISteamOption
-	private cookieStr: string
+	public cookieStr: string
 
 	constructor(username, password, secretKey, options) {
 		this.username = username
@@ -129,13 +129,14 @@ export default class Steam {
 			}
 			try {
 				const loginParams = await this.getLoginParams()
-				console.log(loginParams)
 				let { response, body } = await this.curl(LOGIN_URL, {
 					method: 'POST',
 					form: loginParams
 				})
 				body = JSON.parse(body)
-				console.log(body)
+				if (!body.success) {
+					throw body
+				}
 				// tslint:disable-next-line:no-string-literal
 				if (!body || !body['transfer_urls']) {
 					throw new Error('get body failed')
@@ -155,12 +156,12 @@ export default class Steam {
 						)
 					}))
 					.then((responses: any[]) => {
-						response.push(response)
+						responses.push(response)
 						responses.forEach(_rp => {
 							if (_rp.headers && _rp.headers['set-cookie']) {
-								_rp.headers['set-cookie'].forEach(str => {
-									str = str.split(';')[0]
-									const [key, value] = str.split('=')
+								_rp.headers['set-cookie'].forEach((cookieStr: string) => {
+									cookieStr = cookieStr.split(';')[0]
+									const [key, value] = cookieStr.split('=')
 									this.cookie[key.trim()] = value.trim()
 								})
 							}
@@ -170,8 +171,8 @@ export default class Steam {
 							str.push(`${k}=${this.cookie[k]}`)
 						})
 						this.cookieStr = str.join(';')
-			   fs.writeFileSync(path.resolve(__dirname, `./bot/${this.username}.txt`), this.cookieStr)
-			   resolve()
+						fs.writeFileSync(path.resolve(__dirname, `./bot/${this.username}.txt`), this.cookieStr)
+						resolve()
 					})
 					.catch(err => {
 						throw err

@@ -12,8 +12,9 @@ robot.login()
 				console.log(err)
 				return
 			}
-			fs.writeFile('i.html', body, err => {
-				console.log(err)
+			fs.writeFile('i.html', body, error => {
+				console.log(error)
 			})
 		})
 	})
+	
