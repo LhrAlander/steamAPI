@@ -1,16 +1,13 @@
-import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as path from 'path'
 
 import * as request from 'request'
 
-import struct from './util/struct'
 import RSA from './util/RSA'
 import _get2faCode from './util/get2faCode'
 import {
 	RSA_URL,
 	SYNC_URL,
-	CODE_CHARS,
 	LOGIN_URL
 } from './consts'
 
@@ -47,7 +44,7 @@ export default class Steam {
 	private options: ISteamOption
 	public cookieStr: string
 
-	constructor(username, password, secretKey, options) {
+	constructor(username, password, secretKey, options?: ISteamOption) {
 		this.username = username
 		this.password = password
 		this.secretKey = secretKey
@@ -141,10 +138,10 @@ export default class Steam {
 				if (!body || !body['transfer_urls']) {
 					throw new Error('get body failed')
 				}
-				Promise.all(
+				const transferResponsePromises =
 					// tslint:disable-next-line:no-string-literal
-					body['transfer_urls'].map(url => {
-						return new Promise((_res, _rej) => {
+					body['transfer_urls'].map(
+						url => new Promise((_res, _rej) => {
 							this.curl(url, { body: body.transfer_parameters, json: true })
 								.then(transferRes => {
 									_res(transferRes.response)
@@ -152,9 +149,9 @@ export default class Steam {
 								.catch(err => {
 									_rej(err)
 								})
-						}
-						)
-					}))
+						})
+					)
+				Promise.all(transferResponsePromises)
 					.then((responses: any[]) => {
 						responses.push(response)
 						responses.forEach(_rp => {
@@ -182,8 +179,6 @@ export default class Steam {
 				console.log(error)
 				reject(error)
 			}
-
 		})
 	}
-
 }
