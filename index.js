@@ -1,47 +1,17 @@
-const request = require('request')
-const RSA = require('./src/lib/RSA')
-const getCode = require('./2fa')
+const SteamBot = require('./src/scripts/Steam')
 
-async function login () {
-  let code = await getCode('/ItRwbqDDoVXsurB8cBjw3nO+js=', {
-    proxy: 'http://127.0.0.1:1080'
+const bot = new SteamBot(
+  'lhairui321',
+  'hairui321',
+  'EX3sgi1o6S4hES1qqAE8PuDumvI=',
+  '17sypnHsAi2qMJTGJ/bb3oxwkcs='
+)
+
+bot.setSteamId('76561198844007113')
+bot.setUniqueIdForPhone('android:d8d1e265-442d-4c45-8750-c0cf33afced9')
+bot.setMachineAuth('1AB44C700E535E2E7E31B856B3D093CC7663BC7E')
+bot
+  .login()
+  .then(() => {
+    bot.getConfirmPage()
   })
-  request.post(
-    'https://store.steampowered.com/login/getrsakey/',
-    {
-      formData: {
-        donotcache: new Date().getTime(),
-        username: 'alanderlt'
-      }
-    },
-    (err, response, keyBody) => {
-      keyBody = JSON.parse(keyBody)
-      let pubKey = RSA.getPublicKey(keyBody.publickey_mod, keyBody.publickey_exp)
-      let password = RSA.encrypt('hairui321', pubKey)
-      console.log(password)
-      let loginParams = {
-        password,
-        username: 'alanderlt',
-        twofactorcode: code,
-        emailauth: '',
-        loginfriendlyname: '',
-        captchagid: -1,
-        captcha_text: '',
-        emailsteamid: '',
-        rsatimestamp: keyBody.timestamp,
-        remember_login: true,
-        donotcache: new Date().getTime()
-      }
-      request.post(
-        'https://store.steampowered.com/login/dologin/',
-        { form: loginParams },
-        (err, res, loginBody) => {
-          console.log(err, loginBody)
-          console.log(res.headers)
-        }
-      )
-    }
-  )
-}
-
-login()

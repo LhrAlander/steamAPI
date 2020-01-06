@@ -10,7 +10,8 @@ const {
   RSA_URL,
   SYNC_URL,
   CODE_CHARS,
-  LOGIN_URL
+  LOGIN_URL,
+  CONFIRM_PAGE_URL
 } = require('../config/urls')
 
 /**
@@ -19,11 +20,24 @@ const {
  * @param {*} password 
  * @param {?可选} serectKey 
  */
-function Steam(username, password, serectKey) {
+function Steam(username, password, serectKey, identitySecret) {
   this.username = username
   this.password = password
-  this.serectKey = serectKey,
+  this.serectKey = serectKey
   this.cookie = {}
+  this.identitySecret = identitySecret
+}
+
+Steam.prototype.setSteamId = function setSteamId(id) {
+  this.steamId = id
+}
+
+Steam.prototype.setUniqueIdForPhone = function setUniqueIdForPhone(id) {
+  this.uniqueIdForPhone = id
+}
+
+Steam.prototype.setMachineAuth = function setMachineAuth(id) {
+  this.machineAuth = id
 }
 
 Steam.prototype.get2faCode = function get2faCode(serectKey, options = {}) {
@@ -106,6 +120,7 @@ Steam.prototype.login = function login() {
               this.getCookie(transfer0.headers)
               this.getCookie(response.headers)
               this.getCookie(keyResponse.headers)
+              this.cookie[`steamMachineAuth${this.steamId}`] = this.machineAuth
               let str = []
               Object.keys(this.cookie).forEach(k => {
                 str.push(`${k}=${this.cookie[k]}`)
@@ -123,9 +138,9 @@ Steam.prototype.login = function login() {
   })
 }
 
-Steam.prototype.transfer = function transfer (uri, params) {
-  return new Promise ((resolve, reject) => {
-    request.post(uri, {body: params, json: true, proxy: 'http://127.0.0.1:1080'}, (err, res, body) => {
+Steam.prototype.transfer = function transfer(uri, params) {
+  return new Promise((resolve, reject) => {
+    request.post(uri, { body: params, json: true, proxy: 'http://127.0.0.1:1080' }, (err, res, body) => {
       if (err) {
         console.log(err)
         reject(err)
@@ -135,12 +150,78 @@ Steam.prototype.transfer = function transfer (uri, params) {
   })
 }
 
-Steam.prototype.getCookie = function getCookie (header) {
+Steam.prototype.getCookie = function getCookie(header) {
   if (!header['set-cookie']) return
   header['set-cookie'].forEach(str => {
     str = str.split(';')[0]
     const [key, value] = str.split('=')
     this.cookie[key.trim()] = value.trim()
+  })
+}
+
+Steam.prototype.getConfirmationTimeHash = function getConfirmationTimeHash(time, tag) {
+  function int2byte(s) {
+    s = s.toString(2)
+    if (s.length < 9) {
+      for (let i = s.length; i < 9; i++) {
+        s = '0' + s
+      }
+    }
+    s = s.slice(s.length - 8, s.length)
+    if (s[0] === '1') {
+      return -1 * ((parseInt(s, 2) ^ 0xFF) + 1)
+    }
+    return parseInt(s, 2)
+  }
+  const key = Buffer.from(this.identitySecret, 'base64')
+  const tBytes = Array.prototype.slice.call(new Buffer(tag), 0)
+  let dataLen = 8
+  if (tag) {
+    dataLen = tag.length > 32 ? 40 : 8 + tag.length
+  }
+  const dataBytes = []
+  let i = 8
+  while (i--) {
+    dataBytes[i] = int2byte(time)
+    time >>>= 8
+  }
+  for (let i = 0; i < dataLen - 8; i++) {
+    dataBytes[i + 8] = tBytes[i]
+  }
+  return crypto.createHmac('sha1', key).update(Buffer.from(dataBytes)).digest().toString('base64');
+}
+
+Steam.prototype.getConfirmUrl = function getConfirmUrl() {
+  const t = parseInt((+new Date) / 1000)
+  const p = this.uniqueIdForPhone
+  const a = this.steamId
+  const k = this.getConfirmationTimeHash(t, 'conf')
+  const m = 'android'
+  const tag = 'conf'
+  return `${CONFIRM_PAGE_URL}?p=${p}&a=${a}&k=${k}&m=${m}&tag=${tag}&t=${t}`
+}
+
+Steam.prototype.getConfirmPage = function getConfirmPage() {
+  let url = this.getConfirmUrl()
+  console.log(url)
+  return new Promise((gRes, gRej) => {
+    request.post({
+      url,
+      headers: {
+        'Cookie': this.cookieStr
+      },
+      proxy: 'http://127.0.0.1:1080'
+    }, function (err, resp, body) {
+      if (err) {
+        console.log(err)
+        gRej(err)
+      } else {
+        fs.writeFile(path.resolve(__dirname, `../confirmation.html`), body, err => {
+          console.log(err)
+          gRes()
+        })
+      }
+    })
   })
 }
 
