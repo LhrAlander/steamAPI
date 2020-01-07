@@ -4,6 +4,8 @@ const path = require('path')
 
 const request = require('request')
 const struct = require('python-struct')
+const cheerio = require('cheerio')
+
 const RSA = require('../lib/RSA')
 
 const {
@@ -11,14 +13,17 @@ const {
   SYNC_URL,
   CODE_CHARS,
   LOGIN_URL,
-  CONFIRM_PAGE_URL
+  ACCEPT_CONFIRM,
+  CONFIRM_PAGE_URL,
+  TRADE_OFFERS,
+  ACCEPT_TRADE_OFFER
 } = require('../config/urls')
 
 /**
- * 
- * @param {*} username 
- * @param {*} password 
- * @param {?可选} serectKey 
+ *
+ * @param {*} username
+ * @param {*} password
+ * @param {?可选} serectKey
  */
 function Steam(username, password, serectKey, identitySecret) {
   this.username = username
@@ -41,13 +46,14 @@ Steam.prototype.setMachineAuth = function setMachineAuth(id) {
 }
 
 Steam.prototype.get2faCode = function get2faCode(serectKey, options = {}) {
-  if (!serectKey) return ''
+  serectKey = serectKey || this.serectKey
   return new Promise((resolve, reject) => {
+    if (!serectKey) return resolve('')
     request.post(SYNC_URL, options, (err, response, body) => {
       if (err) {
         reject(err)
       } else {
-        const { response } = JSON.parse(body)
+        const {response} = JSON.parse(body)
         const syncDelta = response['server_time'] - parseInt(+new Date() / 1000)
         const timeStamp = parseInt((parseInt(+new Date() / 1000) + syncDelta) / 30)
         const hmac = crypto
@@ -105,7 +111,7 @@ Steam.prototype.login = function login() {
         }
         request.post(
           LOGIN_URL,
-          { form: loginParams },
+          {form: loginParams},
           async (loginErr, loginResponse, loginBody) => {
             if (loginErr) {
               reject(loginErr)
@@ -113,7 +119,7 @@ Steam.prototype.login = function login() {
             loginBody = JSON.parse(loginBody)
             let transfer = await this.transfer(loginBody['transfer_urls'][1], loginBody['transfer_parameters'])
             let transfer0 = await this.transfer(loginBody['transfer_urls'][0], loginBody['transfer_parameters'])
-            request.get('https://steamcommunity.com/', { proxy: 'http://127.0.0.1:1080' }, (err, response, body) => {
+            request.get('https://steamcommunity.com/', {proxy: 'http://127.0.0.1:1080'}, (err, response, body) => {
               this.cookie = {}
               this.getCookie(loginResponse.headers)
               this.getCookie(transfer.headers)
@@ -121,13 +127,19 @@ Steam.prototype.login = function login() {
               this.getCookie(response.headers)
               this.getCookie(keyResponse.headers)
               this.cookie[`steamMachineAuth${this.steamId}`] = this.machineAuth
+              this.cookie.webTradeEligibility = encodeURIComponent(JSON.stringify({
+                allowed: 1,
+                'allowed_at_time': 0,
+                'steamguard_required_days': 15,
+                'new_device_cooldown_days': 7,
+                'time_checked': parseInt((+new Date()) / 1000)
+              }))
               let str = []
               Object.keys(this.cookie).forEach(k => {
                 str.push(`${k}=${this.cookie[k]}`)
               })
               this.cookieStr = str.join(';')
               fs.writeFile(path.resolve(__dirname, `../bot/${this.username}.txt`), this.cookieStr, err => {
-                console.log(err)
                 resolve()
               })
             })
@@ -140,9 +152,8 @@ Steam.prototype.login = function login() {
 
 Steam.prototype.transfer = function transfer(uri, params) {
   return new Promise((resolve, reject) => {
-    request.post(uri, { body: params, json: true, proxy: 'http://127.0.0.1:1080' }, (err, res, body) => {
+    request.post(uri, {body: params, json: true, proxy: 'http://127.0.0.1:1080'}, (err, res, body) => {
       if (err) {
-        console.log(err)
         reject(err)
       }
       resolve(res)
@@ -173,6 +184,7 @@ Steam.prototype.getConfirmationTimeHash = function getConfirmationTimeHash(time,
     }
     return parseInt(s, 2)
   }
+
   const key = Buffer.from(this.identitySecret, 'base64')
   const tBytes = Array.prototype.slice.call(new Buffer(tag), 0)
   let dataLen = 8
@@ -188,21 +200,20 @@ Steam.prototype.getConfirmationTimeHash = function getConfirmationTimeHash(time,
   for (let i = 0; i < dataLen - 8; i++) {
     dataBytes[i + 8] = tBytes[i]
   }
-  return crypto.createHmac('sha1', key).update(Buffer.from(dataBytes)).digest().toString('base64');
+  return crypto.createHmac('sha1', key).update(Buffer.from(dataBytes)).digest().toString('base64')
 }
 
-Steam.prototype.getConfirmUrl = function getConfirmUrl() {
+Steam.prototype.getConfirmUrl = function getConfirmUrl(url, tag) {
   const t = parseInt((+new Date) / 1000)
   const p = this.uniqueIdForPhone
   const a = this.steamId
-  const k = this.getConfirmationTimeHash(t, 'conf')
+  const k = this.getConfirmationTimeHash(t, tag)
   const m = 'android'
-  const tag = 'conf'
-  return `${CONFIRM_PAGE_URL}?p=${p}&a=${a}&k=${k}&m=${m}&tag=${tag}&t=${t}`
+  return `${url}?p=${p}&a=${a}&k=${k}&m=${m}&tag=${tag}&t=${t}`
 }
 
 Steam.prototype.getConfirmPage = function getConfirmPage() {
-  let url = this.getConfirmUrl()
+  let url = this.getConfirmUrl(CONFIRM_PAGE_URL, 'conf')
   console.log(url)
   return new Promise((gRes, gRej) => {
     request.post({
@@ -213,16 +224,141 @@ Steam.prototype.getConfirmPage = function getConfirmPage() {
       proxy: 'http://127.0.0.1:1080'
     }, function (err, resp, body) {
       if (err) {
-        console.log(err)
         gRej(err)
       } else {
-        fs.writeFile(path.resolve(__dirname, `../confirmation.html`), body, err => {
-          console.log(err)
-          gRes()
+        gRes(body)
+
+      }
+    })
+  })
+}
+
+Steam.prototype.fetchAllConfirms = function fetchAllConfirms() {
+  function parseHtml(htmlTxt) {
+    const $ = cheerio.load(htmlTxt)
+    const confirms = []
+    $('#mobileconf_list .mobileconf_list_entry')
+      .each(function (i, entry) {
+        const cid = $(this).attr('data-confid')
+        const ck = $(this).attr('data-key')
+        const goodsName = $(this).find('.mobileconf_list_entry_description div span').text()
+        confirms.push({
+          cid,
+          ck,
+          goodsName
+        })
+      })
+    return confirms
+  }
+
+  return new Promise((gRes, gRej) => {
+    this.getConfirmPage()
+      .then((body) => {
+        fs.writeFile(path.resolve(__dirname, `../templates/confirmation-${+new Date()}.html`), body, err => {
+          if (err) {
+            gRej(err)
+          }
+          let confirms = parseHtml((body))
+          gRes(confirms)
+        })
+      })
+      .catch(err => {
+        gRej(err)
+      })
+  })
+}
+
+// 移动端确认
+Steam.prototype.acceptConfirm = function acceptConfirm(confirm) {
+  const url = this.getConfirmUrl(ACCEPT_CONFIRM, 'allow') + `&op=allow&cid=${confirm.cid}&ck=${confirm.ck}`
+  console.log(url)
+  return new Promise((gRes, gRej) => {
+    request.post({
+      url,
+      headers: {
+        'Cookie': this.cookieStr
+      },
+      proxy: 'http://127.0.0.1:1080'
+    }, function (err, resp, body) {
+      if (err) {
+        gRej(err)
+      } else {
+        gRes(body)
+      }
+    })
+  })
+}
+
+// 获取所有交易报价
+Steam.prototype.getAllTradeOffers = async function getAllTradeOffers() {
+  function parseHTML(htmlText) {
+    const $ = cheerio.load(htmlText)
+    const ids = []
+    $('.responsive_page_template_content .maincontent .tradeoffer')
+      .each(function () {
+        const id = $(this).attr('id').split('_')[1]
+        const actionLink = $(this).find('.tradeoffer_footer_actions')
+        const pid = $(this).find('.tradeoffer_partner a').attr('href').match(/profiles\/(\d*)/)[1]
+        if (actionLink) {
+          ids.push({
+            id,
+            pid
+          })
+        }
+      })
+    return ids
+  }
+
+  return new Promise((gRes, gRej) => {
+    const url = TRADE_OFFERS.replace('{steamid}', this.steamId)
+    console.log(this.cookieStr, url)
+    request({
+      url,
+      headers: {
+        'Cookie': this.cookieStr
+      },
+      proxy: 'http://127.0.0.1:1080'
+    }, function (err, resp, body) {
+      if (err) {
+        gRej(err)
+      } else {
+        fs.writeFile(path.resolve(__dirname, `../templates/tradeoffers-${+new Date()}.html`), body, err => {
+          if (err) {
+            gRej(err)
+          } else {
+            gRes(parseHTML(body))
+          }
         })
       }
     })
   })
 }
 
+// 确认交易报价
+Steam.prototype.acceptTradeOffer = function acceptTradeOffer(id, pid) {
+  const url = ACCEPT_TRADE_OFFER.replace('{id}', id)
+  const params = {
+    sessionid: this.cookie.sessionid,
+    serverid: 1,
+    tradeofferid: id,
+    partner: pid
+  }
+  console.log(params, this.cookieStr)
+  return new Promise((gRes, gRej) => {
+    request.post(url, {
+      form: params,
+      headers: {
+        Cookie: this.cookieStr,
+        Referer: 'https://steamcommunity.com/tradeoffer/${id}/'
+      },
+      proxy: 'http://127.0.0.1:1080'
+    }, function (err, resp, body) {
+      if (err) {
+        gRej(err)
+      } else {
+        gRes(body)
+      }
+    })
+  })
+}
 module.exports = Steam
