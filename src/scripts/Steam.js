@@ -214,7 +214,6 @@ Steam.prototype.getConfirmUrl = function getConfirmUrl(url, tag) {
 
 Steam.prototype.getConfirmPage = function getConfirmPage() {
   let url = this.getConfirmUrl(CONFIRM_PAGE_URL, 'conf')
-  console.log(url)
   return new Promise((gRes, gRej) => {
     request.post({
       url,
@@ -271,7 +270,6 @@ Steam.prototype.fetchAllConfirms = function fetchAllConfirms() {
 // 移动端确认
 Steam.prototype.acceptConfirm = function acceptConfirm(confirm) {
   const url = this.getConfirmUrl(ACCEPT_CONFIRM, 'allow') + `&op=allow&cid=${confirm.cid}&ck=${confirm.ck}`
-  console.log(url)
   return new Promise((gRes, gRej) => {
     request.post({
       url,
@@ -283,6 +281,7 @@ Steam.prototype.acceptConfirm = function acceptConfirm(confirm) {
       if (err) {
         gRej(err)
       } else {
+        body = JSON.parse(body)
         gRes(body)
       }
     })
@@ -297,7 +296,8 @@ Steam.prototype.getAllTradeOffers = async function getAllTradeOffers() {
     $('.responsive_page_template_content .maincontent .tradeoffer')
       .each(function () {
         const id = $(this).attr('id').split('_')[1]
-        const actionLink = $(this).find('.tradeoffer_footer_actions')
+        const actionLink = $(this).find('.tradeoffer_footer_actions').length
+        console.log({actionLink})
         const pid = $(this).find('.tradeoffer_partner a').attr('href').match(/profiles\/(\d*)/)[1]
         if (actionLink) {
           ids.push({
@@ -311,7 +311,6 @@ Steam.prototype.getAllTradeOffers = async function getAllTradeOffers() {
 
   return new Promise((gRes, gRej) => {
     const url = TRADE_OFFERS.replace('{steamid}', this.steamId)
-    console.log(this.cookieStr, url)
     request({
       url,
       headers: {
@@ -343,7 +342,6 @@ Steam.prototype.acceptTradeOffer = function acceptTradeOffer(id, pid) {
     tradeofferid: id,
     partner: pid
   }
-  console.log(params, this.cookieStr)
   return new Promise((gRes, gRej) => {
     request.post(url, {
       form: params,
