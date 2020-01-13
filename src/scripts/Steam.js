@@ -86,7 +86,8 @@ Steam.prototype.login = function login() {
         formData: {
           donotcache: new Date().getTime(),
           username: this.username
-        }
+        },
+        proxy: 'http://127.0.0.1:1080'
       },
       async (keyErr, keyResponse, keyBody) => {
         if (keyErr) {
@@ -111,7 +112,10 @@ Steam.prototype.login = function login() {
         }
         request.post(
           LOGIN_URL,
-          {form: loginParams},
+          {
+            form: loginParams,
+            proxy: 'http://127.0.0.1:1080'
+          },
           async (loginErr, loginResponse, loginBody) => {
             if (loginErr) {
               reject(loginErr)
@@ -359,4 +363,36 @@ Steam.prototype.acceptTradeOffer = function acceptTradeOffer(id, pid) {
     })
   })
 }
+
+// 查询报价具体内容
+Steam.prototype.getTradeOfferDetail = function getTradeOfferDetail(id) {
+  const url = `https://steamcommunity.com/tradeoffer/${id}`
+  function parseHtml(htmlText) {
+    const $ = cheerio.load(htmlText)
+    let name = $('#trade_hover #hover_item_name').text()
+    console.log(name)
+  }
+  return new Promise((gRes, gRej) => {
+    request(
+      url,
+      {
+        headers: {
+          Cookie: this.cookieStr
+        },
+        proxy: 'http://127.0.0.1:1080'
+      },
+      (err, resp, body) => {
+        if (err) {
+          gRej(err)
+        } else {
+          fs.writeFileSync('tradeDetail.html', body)
+          parseHtml(body)
+          gRes()
+        }
+      }
+    )
+  })
+}
+
 module.exports = Steam
+https://api.steampowered.com/IEconService/GetTradeOffer/v0002/?key=BAE71D31D611BCC620C99E00E842302E&tradeofferid=3866565653&lang='zh'
