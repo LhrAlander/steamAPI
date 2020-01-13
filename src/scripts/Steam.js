@@ -5,6 +5,7 @@ const path = require('path')
 const request = require('request')
 const struct = require('python-struct')
 const cheerio = require('cheerio')
+const bigInteger = require('big-integer')
 
 const RSA = require('../lib/RSA')
 
@@ -35,6 +36,10 @@ function Steam(username, password, serectKey, identitySecret) {
 
 Steam.prototype.setSteamId = function setSteamId(id) {
   this.steamId = id
+}
+
+Steam.prototype.setApiKey = function setApiKey(key) {
+  this.apiKey = key
 }
 
 Steam.prototype.setUniqueIdForPhone = function setUniqueIdForPhone(id) {
@@ -228,6 +233,9 @@ Steam.prototype.getConfirmPage = function getConfirmPage() {
     }, function (err, resp, body) {
       if (err) {
         gRej(err)
+      } else if (resp.statusCode === 401 || resp.statusCode === 403) {
+        console.log('重新登陆')
+        gRej('relogin')
       } else {
         gRes(body)
 
@@ -268,6 +276,7 @@ Steam.prototype.fetchAllConfirms = function fetchAllConfirms() {
       .catch(err => {
         gRej(err)
       })
+
   })
 }
 
@@ -285,6 +294,7 @@ Steam.prototype.acceptConfirm = function acceptConfirm(confirm) {
       if (err) {
         gRej(err)
       } else {
+        console.log(resp.statusCode, body)
         body = JSON.parse(body)
         gRes(body)
       }
@@ -294,44 +304,66 @@ Steam.prototype.acceptConfirm = function acceptConfirm(confirm) {
 
 // 获取所有交易报价
 Steam.prototype.getAllTradeOffers = async function getAllTradeOffers() {
-  function parseHTML(htmlText) {
-    const $ = cheerio.load(htmlText)
-    const ids = []
-    $('.responsive_page_template_content .maincontent .tradeoffer')
-      .each(function () {
-        const id = $(this).attr('id').split('_')[1]
-        const actionLink = $(this).find('.tradeoffer_footer_actions').length
-        console.log({actionLink})
-        const pid = $(this).find('.tradeoffer_partner a').attr('href').match(/profiles\/(\d*)/)[1]
-        if (actionLink) {
-          ids.push({
-            id,
-            pid
-          })
-        }
-      })
-    return ids
-  }
 
   return new Promise((gRes, gRej) => {
-    const url = TRADE_OFFERS.replace('{steamid}', this.steamId)
-    request({
-      url,
-      headers: {
-        'Cookie': this.cookieStr
-      },
-      proxy: 'http://127.0.0.1:1080'
-    }, function (err, resp, body) {
+    function getTradeOfferItem(classid, instanceid) {
+      const url = `https://steamcommunity.com/economy/itemclasshover/570/${classid}/${instanceid}?content_only=1&l=schinese`
+      return new Promise((res, rej) => {
+        request(url,
+          {
+            proxy: 'http://127.0.0.1:1080'
+          },
+          (err, resp, body) => {
+            if (err) {
+              rej(err)
+            } else {
+              try {
+                let jsonObj = body.match(/BuildHover\([^,]*,\s*([^)]*)\)/)[1].trim()
+                res({
+                  classid,
+                  instanceid,
+                  name: decodeURI(JSON.parse(jsonObj).name)
+                })
+              } catch (e) {
+                rej(e)
+              }
+            }
+          }
+        )
+      })
+    }
+
+    const apiUrl = `https://api.steampowered.com/IEconService/GetTradeOffers/v1/?key=${this.apiKey}&get_received_offers=true&active_only=true`
+    request(apiUrl, {
+      proxy: 'http://127.0.0.1:1080',
+      json: true
+    }, (err, resp, body) => {
       if (err) {
         gRej(err)
       } else {
-        fs.writeFile(path.resolve(__dirname, `../templates/tradeoffers-${+new Date()}.html`), body, err => {
-          if (err) {
-            gRej(err)
-          } else {
-            gRes(parseHTML(body))
+        const offers = body.response['trade_offers_received'].map(_ => {
+          return {
+            id: _.tradeofferid,
+            pid: bigInteger('76561197960265728').add(bigInteger(_['accountid_other'])).toString(),
+            item: _['items_to_receive'][0]
           }
         })
+        let promises = []
+        for (let i = 0, l = offers.length; i < l; i++) {
+          let item = offers[i].item
+          promises.push(getTradeOfferItem(item.classid, item.instanceid))
+        }
+        Promise
+          .all(promises)
+          .then(items => {
+            items.forEach((_, i) => {
+              offers[i].item = _
+            })
+            gRes(offers)
+          })
+          .catch(err => {
+            gRej(err)
+          })
       }
     })
   })
@@ -367,11 +399,13 @@ Steam.prototype.acceptTradeOffer = function acceptTradeOffer(id, pid) {
 // 查询报价具体内容
 Steam.prototype.getTradeOfferDetail = function getTradeOfferDetail(id) {
   const url = `https://steamcommunity.com/tradeoffer/${id}`
+
   function parseHtml(htmlText) {
     const $ = cheerio.load(htmlText)
     let name = $('#trade_hover #hover_item_name').text()
     console.log(name)
   }
+
   return new Promise((gRes, gRej) => {
     request(
       url,
@@ -395,4 +429,3 @@ Steam.prototype.getTradeOfferDetail = function getTradeOfferDetail(id) {
 }
 
 module.exports = Steam
-https://api.steampowered.com/IEconService/GetTradeOffer/v0002/?key=BAE71D31D611BCC620C99E00E842302E&tradeofferid=3866565653&lang='zh'
