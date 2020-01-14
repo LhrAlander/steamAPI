@@ -26,12 +26,34 @@ const {
  * @param {*} password
  * @param {?可选} serectKey
  */
-function Steam(username, password, serectKey, identitySecret) {
-  this.username = username
-  this.password = password
-  this.serectKey = serectKey
-  this.cookie = {}
-  this.identitySecret = identitySecret
+function Steam(_username, password, serectKey, identitySecret) {
+  if (typeof _username === 'object') {
+    const {
+      sharedSecret,
+      identitySecret,
+      steamid,
+      machineAuth,
+      userName,
+      password,
+      apiKey,
+      uniqueIdForPhone
+    } = _username
+    this.username = userName
+    this.password = password
+    this.serectKey = sharedSecret
+    this.cookie = {}
+    this.identitySecret = identitySecret
+    this.setMachineAuth(machineAuth)
+    this.setSteamId(steamid)
+    this.setApiKey(apiKey)
+    this.setUniqueIdForPhone(uniqueIdForPhone)
+  } else {
+    this.username = _username
+    this.password = password
+    this.serectKey = serectKey
+    this.cookie = {}
+    this.identitySecret = identitySecret
+  }
 }
 
 Steam.prototype.setSteamId = function setSteamId(id) {
@@ -125,6 +147,7 @@ Steam.prototype.login = function login() {
           remember_login: true,
           donotcache: new Date().getTime()
         }
+        console.log('登录参数获取完毕')
         request.post(
           LOGIN_URL,
           {
@@ -138,8 +161,10 @@ Steam.prototype.login = function login() {
             loginBody = JSON.parse(loginBody)
             let transfer = await this.transfer(loginBody['transfer_urls'][1], loginBody['transfer_parameters'])
             let transfer0 = await this.transfer(loginBody['transfer_urls'][0], loginBody['transfer_parameters'])
+            console.log('开始获取cookie')
             request.get('https://steamcommunity.com/', {proxy: 'http://127.0.0.1:1080'}, (err, response, body) => {
               this.cookie = {}
+              console.log('获取cookie完毕')
               this.getCookie(loginResponse.headers)
               this.getCookie(transfer.headers)
               this.getCookie(transfer0.headers)
@@ -312,6 +337,7 @@ Steam.prototype.getConfirmDetail = function getConfirmDetail(id) {
               for (let i = 0, l = receiveItems.length; i < l; i++) {
                 receiveItems[i] = items.shift()
               }
+              console.log(`获取${id}确认详情成功！`)
               gRes({
                 partenerInfo,
                 giveItems,
@@ -340,7 +366,7 @@ Steam.prototype.fetchAllConfirms = function fetchAllConfirms() {
         const ck = $(this).attr('data-key')
         confirms.push({
           cid,
-          ck,
+          ck
         })
       })
     return confirms
@@ -406,7 +432,16 @@ Steam.prototype.acceptConfirm = function acceptConfirm(confirm) {
           .catch(gRej)
       } else {
         body = JSON.parse(body)
-        gRes(body)
+        if (!body.success) {
+          console.log(`完成确认${confirm.cid}出错，1s后重试`)
+          setTimeout(() => {
+            this.acceptConfirm(confirm)
+              .then(gRes)
+              .catch(gRej)
+          }, 1000)
+        } else {
+          gRes(body)
+        }
       }
     })
   })
@@ -464,6 +499,7 @@ Steam.prototype.getPersonProfile = function getPersonProfile(id) {
 Steam.prototype.getAllTradeOffers = async function getAllTradeOffers() {
   return new Promise((gRes, gRej) => {
     const apiUrl = `https://api.steampowered.com/IEconService/GetTradeOffers/v1/?key=${this.apiKey}&get_received_offers=true&active_only=true`
+    console.log(apiUrl)
     request(apiUrl, {
       proxy: 'http://127.0.0.1:1080',
       json: true
@@ -471,6 +507,9 @@ Steam.prototype.getAllTradeOffers = async function getAllTradeOffers() {
       if (err) {
         gRej(err)
       } else {
+        if (!body.response) {
+          return gRej(body)
+        }
         if (!body.response['trade_offers_received']) {
           return gRes([])
         }
