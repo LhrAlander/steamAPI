@@ -10,5 +10,5 @@ bot.setApiKey(account.apiKey)
 
 bot
   .getAllTradeOffers()
-  .then(log)
+  .then(_ => log(JSON.stringify(_)))
   .catch(log)

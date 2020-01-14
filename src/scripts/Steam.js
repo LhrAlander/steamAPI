@@ -80,8 +80,18 @@ Steam.prototype.get2faCode = function get2faCode(serectKey, options = {}) {
   })
 }
 
+Steam.prototype.logout = function logout() {
+  fs.writeFileSync(path.resolve(__dirname, `../bot/${this.username}.txt`), '')
+}
+
 Steam.prototype.login = function login() {
   return new Promise((resolve, reject) => {
+    let cookieStr = fs.readFileSync(path.resolve(__dirname, `../bot/${this.username}.txt`)).toString()
+    if (cookieStr) {
+      this.cookieStr = cookieStr
+      return resolve()
+    }
+    console.log('开始登录')
     if (!this.username) {
       reject('need username')
     }
@@ -230,12 +240,16 @@ Steam.prototype.getConfirmPage = function getConfirmPage() {
         'Cookie': this.cookieStr
       },
       proxy: 'http://127.0.0.1:1080'
-    }, function (err, resp, body) {
+    }, (err, resp, body) => {
       if (err) {
         gRej(err)
       } else if (resp.statusCode === 401 || resp.statusCode === 403) {
         console.log('重新登陆')
-        gRej('relogin')
+        this.logout()
+        this.login()
+          .then(() => this.getConfirmPage())
+          .then(gRes)
+          .catch(gRej)
       } else {
         gRes(body)
 
@@ -244,19 +258,89 @@ Steam.prototype.getConfirmPage = function getConfirmPage() {
   })
 }
 
+Steam.prototype.getConfirmDetail = function getConfirmDetail(id) {
+  const url = this.getConfirmUrl(`https://steamcommunity.com/mobileconf/details/${id}`, `details${id}`)
+  return new Promise((gRes, gRej) => {
+    request(url, {
+      headers: {
+        Cookie: this.cookieStr
+      },
+      proxy: 'http://127.0.0.1:1080',
+      json: true
+    }, (err, resp, body) => {
+      if (err) {
+        gRej(err)
+      } else {
+        if (!body.success) {
+          console.log(`获取${id}确认详情出错，1s后再次获取`)
+          setTimeout(() => {
+            this.getConfirmDetail(id)
+              .then(gRes)
+              .catch(gRej)
+          }, 1000)
+        } else {
+          const $ = cheerio.load(body.html)
+          const partenerid = $('.trade_partner_headline_sub a').attr('href').match(/profiles\/(\d*)/)[1]
+          const _giveItems = $('.tradeoffer_items.primary .tradeoffer_item_list .trade_item')
+          const giveItems = []
+          const _receiveItems = $('.tradeoffer_items.secondary .tradeoffer_item_list .trade_item')
+          const receiveItems = []
+          const promises = [this.getPersonProfile(partenerid)]
+          if (_giveItems.length) {
+            _giveItems.each((i, item) => {
+              const [, , classid, instanceid] = $(item).attr('data-economy-item').split('/')
+              giveItems.push({classid, instanceid})
+            })
+          }
+          if (_receiveItems.length) {
+            _receiveItems.each((i, item) => {
+              const [, , classid, instanceid] = $(item).attr('data-economy-item').split('/')
+              receiveItems.push({classid, instanceid})
+            })
+          }
+          for (let i = 0, l = giveItems.length; i < l; i++) {
+            promises.push(this.getTradeOfferItem(giveItems[i].classid, giveItems[i].instanceid))
+          }
+          for (let i = 0, l = receiveItems.length; i < l; i++) {
+            promises.push(this.getTradeOfferItem(receiveItems[i].classid, receiveItems[i].instanceid))
+          }
+          Promise.all(promises)
+            .then(([partenerInfo, ...items]) => {
+              for (let i = 0, l = giveItems.length; i < l; i++) {
+                giveItems[i] = items.shift()
+              }
+              for (let i = 0, l = receiveItems.length; i < l; i++) {
+                receiveItems[i] = items.shift()
+              }
+              gRes({
+                partenerInfo,
+                giveItems,
+                receiveItems
+              })
+            })
+            .catch(gRej)
+        }
+      }
+    })
+  })
+}
+
 Steam.prototype.fetchAllConfirms = function fetchAllConfirms() {
   function parseHtml(htmlTxt) {
+    let invalid = /Invalid authenticator/.test(htmlTxt)
+    if (invalid) {
+      console.log('invalid')
+      return false
+    }
     const $ = cheerio.load(htmlTxt)
     const confirms = []
     $('#mobileconf_list .mobileconf_list_entry')
       .each(function (i, entry) {
         const cid = $(this).attr('data-confid')
         const ck = $(this).attr('data-key')
-        const goodsName = $(this).find('.mobileconf_list_entry_description div span').text()
         confirms.push({
           cid,
           ck,
-          goodsName
         })
       })
     return confirms
@@ -270,7 +354,27 @@ Steam.prototype.fetchAllConfirms = function fetchAllConfirms() {
             gRej(err)
           }
           let confirms = parseHtml((body))
-          gRes(confirms)
+          if (!confirms) {
+            this.fetchAllConfirms()
+              .then(gRes)
+              .catch(gRej)
+          } else {
+            let promises = []
+            for (let i = 0, l = confirms.length; i < l; i++) {
+              promises.push(this.getConfirmDetail(confirms[0].cid))
+            }
+            Promise.all(promises)
+              .then(details => {
+                for (let i = 0, l = confirms.length; i < l; i++) {
+                  confirms[i] = {
+                    ...confirms[i],
+                    ...details[i]
+                  }
+                }
+                gRes(confirms)
+              })
+              .catch(gRej)
+          }
         })
       })
       .catch(err => {
@@ -290,11 +394,17 @@ Steam.prototype.acceptConfirm = function acceptConfirm(confirm) {
         'Cookie': this.cookieStr
       },
       proxy: 'http://127.0.0.1:1080'
-    }, function (err, resp, body) {
+    }, (err, resp, body) => {
       if (err) {
         gRej(err)
+      } else if (resp.statusCode === 401 || resp.statusCode === 403) {
+        console.log('移动端确认，重新登录')
+        this.logout()
+        this.login()
+          .then(() => this.acceptConfirm(confirm))
+          .then(gRes)
+          .catch(gRej)
       } else {
-        console.log(resp.statusCode, body)
         body = JSON.parse(body)
         gRes(body)
       }
@@ -302,37 +412,57 @@ Steam.prototype.acceptConfirm = function acceptConfirm(confirm) {
   })
 }
 
+// 获取物品信息
+Steam.prototype.getTradeOfferItem = function getTradeOfferItem(classid, instanceid) {
+  const url = `https://steamcommunity.com/economy/itemclasshover/570/${classid}/${instanceid}?content_only=1&l=en`
+  return new Promise((res, rej) => {
+    request(url,
+      {
+        proxy: 'http://127.0.0.1:1080'
+      },
+      (err, resp, body) => {
+        if (err) {
+          rej(err)
+        } else {
+          try {
+            let jsonObj = body.match(/BuildHover\([^,]*,\s*(.*)\)/)[1].trim()
+            res({
+              classid,
+              instanceid,
+              name: decodeURI(JSON.parse(jsonObj).name)
+            })
+          } catch (e) {
+            rej(e)
+          }
+        }
+      }
+    )
+  })
+}
+
+// 获取用户信息
+Steam.prototype.getPersonProfile = function getPersonProfile(id) {
+  const url = `http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${this.apiKey}&steamids=${id}`
+  return new Promise((res, rej) => {
+    request(url, {
+      proxy: 'http://127.0.0.1:1080',
+      json: true
+    }, (err, resp, body) => {
+      if (err) {
+        rej(err)
+      } else {
+        res({
+          name: body.response.players[0].personaname,
+          createTime: body.response.players[0].timecreated
+        })
+      }
+    })
+  })
+}
+
 // 获取所有交易报价
 Steam.prototype.getAllTradeOffers = async function getAllTradeOffers() {
-
   return new Promise((gRes, gRej) => {
-    function getTradeOfferItem(classid, instanceid) {
-      const url = `https://steamcommunity.com/economy/itemclasshover/570/${classid}/${instanceid}?content_only=1&l=schinese`
-      return new Promise((res, rej) => {
-        request(url,
-          {
-            proxy: 'http://127.0.0.1:1080'
-          },
-          (err, resp, body) => {
-            if (err) {
-              rej(err)
-            } else {
-              try {
-                let jsonObj = body.match(/BuildHover\([^,]*,\s*([^)]*)\)/)[1].trim()
-                res({
-                  classid,
-                  instanceid,
-                  name: decodeURI(JSON.parse(jsonObj).name)
-                })
-              } catch (e) {
-                rej(e)
-              }
-            }
-          }
-        )
-      })
-    }
-
     const apiUrl = `https://api.steampowered.com/IEconService/GetTradeOffers/v1/?key=${this.apiKey}&get_received_offers=true&active_only=true`
     request(apiUrl, {
       proxy: 'http://127.0.0.1:1080',
@@ -341,24 +471,48 @@ Steam.prototype.getAllTradeOffers = async function getAllTradeOffers() {
       if (err) {
         gRej(err)
       } else {
-        const offers = body.response['trade_offers_received'].map(_ => {
-          return {
-            id: _.tradeofferid,
-            pid: bigInteger('76561197960265728').add(bigInteger(_['accountid_other'])).toString(),
-            item: _['items_to_receive'][0]
-          }
-        })
+        if (!body.response['trade_offers_received']) {
+          return gRes([])
+        }
+        const offers =
+          body
+            .response
+            ['trade_offers_received']
+            .filter(_ => _['trade_offer_state'] === 2)
+            .map(_ => {
+              return {
+                id: _.tradeofferid,
+                pid: bigInteger('76561197960265728').add(bigInteger(_['accountid_other'])).toString(),
+                receiveItems: _['items_to_receive'] || [],
+                giveItems: _['items_to_give'] || []
+              }
+            })
         let promises = []
+
         for (let i = 0, l = offers.length; i < l; i++) {
-          let item = offers[i].item
-          promises.push(getTradeOfferItem(item.classid, item.instanceid))
+          promises.push(this.getPersonProfile(offers[i].pid))
+        }
+        for (let i = 0, l = offers.length; i < l; i++) {
+          for (let j = 0, k = offers[i].receiveItems.length; j < k; j++) {
+            promises.push(this.getTradeOfferItem(offers[i].receiveItems[j].classid, offers[i].receiveItems[j].instanceid))
+          }
+          for (let j = 0, k = offers[i].giveItems.length; j < k; j++) {
+            promises.push(this.getTradeOfferItem(offers[i].giveItems[j].classid, offers[i].giveItems[j].instanceid))
+          }
         }
         Promise
           .all(promises)
           .then(items => {
-            items.forEach((_, i) => {
-              offers[i].item = _
-            })
+            let offerItems = items.slice(offers.length)
+            for (let i = 0, l = offers.length; i < l; i++) {
+              offers[i].partenerInfo = items[i]
+              for (let j = 0, k = offers[i].receiveItems.length; j < k; j++) {
+                offers[i].receiveItems[j] = offerItems.shift()
+              }
+              for (let j = 0, k = offers[i].giveItems.length; j < k; j++) {
+                offers[i].giveItems[j] = offerItems.shift()
+              }
+            }
             gRes(offers)
           })
           .catch(err => {
@@ -385,46 +539,22 @@ Steam.prototype.acceptTradeOffer = function acceptTradeOffer(id, pid) {
         Cookie: this.cookieStr,
         Referer: 'https://steamcommunity.com/tradeoffer/${id}/'
       },
-      proxy: 'http://127.0.0.1:1080'
-    }, function (err, resp, body) {
+      proxy: 'http://127.0.0.1:1080',
+      json: true
+    }, (err, resp, body) => {
       if (err) {
         gRej(err)
+      } else if (resp.statusCode === 401 || resp.statusCode === 403) {
+        console.log('重新登录', resp.statusCode)
+        this.logout()
+        this.login()
+          .then(() => this.acceptTradeOffer(id, pid))
+          .then(gRes)
+          .catch(gRej)
       } else {
         gRes(body)
       }
     })
-  })
-}
-
-// 查询报价具体内容
-Steam.prototype.getTradeOfferDetail = function getTradeOfferDetail(id) {
-  const url = `https://steamcommunity.com/tradeoffer/${id}`
-
-  function parseHtml(htmlText) {
-    const $ = cheerio.load(htmlText)
-    let name = $('#trade_hover #hover_item_name').text()
-    console.log(name)
-  }
-
-  return new Promise((gRes, gRej) => {
-    request(
-      url,
-      {
-        headers: {
-          Cookie: this.cookieStr
-        },
-        proxy: 'http://127.0.0.1:1080'
-      },
-      (err, resp, body) => {
-        if (err) {
-          gRej(err)
-        } else {
-          fs.writeFileSync('tradeDetail.html', body)
-          parseHtml(body)
-          gRes()
-        }
-      }
-    )
   })
 }
 
