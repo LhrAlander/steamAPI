@@ -80,23 +80,28 @@ Steam.prototype.get2faCode = function get2faCode(serectKey, options = {}) {
       if (err) {
         reject(err)
       } else {
-        const {response} = JSON.parse(body)
-        const syncDelta = response['server_time'] - parseInt(+new Date() / 1000)
-        const timeStamp = parseInt((parseInt(+new Date() / 1000) + syncDelta) / 30)
-        const hmac = crypto
-          .createHmac('sha1', Buffer.from(serectKey, 'base64'))
-          .update(struct.pack('>Q', timeStamp))
-          .digest()
-        const start = hmac[19] & 0xf
-        let codeInt =
-          struct.unpack('>I', hmac.subarray(start, start + 4))[0] & 0x7fffffff
-        let code = ''
-        for (let i = 0; i < 5; i++) {
-          let index = codeInt % CODE_CHARS.length
-          codeInt = parseInt(codeInt / CODE_CHARS.length)
-          code += CODE_CHARS[index]
+        try {
+          console.log('SYNC_URL', body)
+          const {response} = JSON.parse(body)
+          const syncDelta = response['server_time'] - parseInt(+new Date() / 1000)
+          const timeStamp = parseInt((parseInt(+new Date() / 1000) + syncDelta) / 30)
+          const hmac = crypto
+            .createHmac('sha1', Buffer.from(serectKey, 'base64'))
+            .update(struct.pack('>Q', timeStamp))
+            .digest()
+          const start = hmac[19] & 0xf
+          let codeInt =
+            struct.unpack('>I', hmac.subarray(start, start + 4))[0] & 0x7fffffff
+          let code = ''
+          for (let i = 0; i < 5; i++) {
+            let index = codeInt % CODE_CHARS.length
+            codeInt = parseInt(codeInt / CODE_CHARS.length)
+            code += CODE_CHARS[index]
+          }
+          resolve(code)
+        } catch (err) {
+          reject(err)
         }
-        resolve(code)
       }
     })
   })
