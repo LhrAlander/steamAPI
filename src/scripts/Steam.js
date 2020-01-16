@@ -163,35 +163,42 @@ Steam.prototype.login = function login() {
             if (loginErr) {
               reject(loginErr)
             }
-            loginBody = JSON.parse(loginBody)
-            let transfer = await this.transfer(loginBody['transfer_urls'][1], loginBody['transfer_parameters'])
-            let transfer0 = await this.transfer(loginBody['transfer_urls'][0], loginBody['transfer_parameters'])
-            console.log('开始获取cookie')
-            request.get('https://steamcommunity.com/', {proxy: 'http://127.0.0.1:1080'}, (err, response, body) => {
-              this.cookie = {}
-              console.log('获取cookie完毕')
-              this.getCookie(loginResponse.headers)
-              this.getCookie(transfer.headers)
-              this.getCookie(transfer0.headers)
-              this.getCookie(response.headers)
-              this.getCookie(keyResponse.headers)
-              this.cookie[`steamMachineAuth${this.steamId}`] = this.machineAuth
-              this.cookie.webTradeEligibility = encodeURIComponent(JSON.stringify({
-                allowed: 1,
-                'allowed_at_time': 0,
-                'steamguard_required_days': 15,
-                'new_device_cooldown_days': 7,
-                'time_checked': parseInt((+new Date()) / 1000)
-              }))
-              let str = []
-              Object.keys(this.cookie).forEach(k => {
-                str.push(`${k}=${this.cookie[k]}`)
+            try {
+              loginBody = JSON.parse(loginBody)
+              let transfer = await this.transfer(loginBody['transfer_urls'][1], loginBody['transfer_parameters'])
+              let transfer0 = await this.transfer(loginBody['transfer_urls'][0], loginBody['transfer_parameters'])
+              console.log('开始获取cookie')
+              request.get('https://steamcommunity.com/', {proxy: 'http://127.0.0.1:1080'}, (err, response, body) => {
+                this.cookie = {}
+                console.log('获取cookie完毕')
+                this.getCookie(loginResponse.headers)
+                this.getCookie(transfer.headers)
+                this.getCookie(transfer0.headers)
+                this.getCookie(response.headers)
+                this.getCookie(keyResponse.headers)
+                this.cookie[`steamMachineAuth${this.steamId}`] = this.machineAuth
+                this.cookie.webTradeEligibility = encodeURIComponent(JSON.stringify({
+                  allowed: 1,
+                  'allowed_at_time': 0,
+                  'steamguard_required_days': 15,
+                  'new_device_cooldown_days': 7,
+                  'time_checked': parseInt((+new Date()) / 1000)
+                }))
+                let str = []
+                Object.keys(this.cookie).forEach(k => {
+                  str.push(`${k}=${this.cookie[k]}`)
+                })
+                this.cookieStr = str.join(';')
+                fs.writeFile(path.resolve(__dirname, `../bot/${this.username}.txt`), this.cookieStr, err => {
+                  resolve()
+                })
               })
-              this.cookieStr = str.join(';')
-              fs.writeFile(path.resolve(__dirname, `../bot/${this.username}.txt`), this.cookieStr, err => {
-                resolve()
-              })
-            })
+            } catch (err) {
+              console.log('登录异常，重新登录', err)
+              this.login()
+                .then(resolve)
+                .catch(reject)
+            }
           }
         )
       }
@@ -438,7 +445,7 @@ Steam.prototype.acceptConfirm = function acceptConfirm(confirm) {
       } else {
         body = JSON.parse(body)
         if (!body.success) {
-          console.log(`完成确认${confirm.cid}出错，1s后重试`)
+          console.log(`完成确认${confirm.cid}出错，1s后重试`, body)
           setTimeout(() => {
             this.acceptConfirm(confirm)
               .then(gRes)
