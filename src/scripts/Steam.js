@@ -54,6 +54,8 @@ function Steam(_username, password, serectKey, identitySecret) {
     this.cookie = {}
     this.identitySecret = identitySecret
   }
+  this.loginDep = []
+  this.isLogin = false
 }
 
 Steam.prototype.setSteamId = function setSteamId(id) {
@@ -113,96 +115,110 @@ Steam.prototype.logout = function logout() {
 
 Steam.prototype.login = function login() {
   return new Promise((resolve, reject) => {
-    let cookieStr = fs.readFileSync(path.resolve(__dirname, `../bot/${this.username}.txt`)).toString()
-    if (cookieStr) {
-      this.cookieStr = cookieStr
-      return resolve()
-    }
-    console.log('开始登录')
-    if (!this.username) {
-      reject('need username')
-    }
-    request.post(
-      RSA_URL,
-      {
-        formData: {
-          donotcache: new Date().getTime(),
-          username: this.username
-        },
-        proxy: 'http://127.0.0.1:1080'
-      },
-      async (keyErr, keyResponse, keyBody) => {
-        if (keyErr) {
-          reject(keyErr)
-        }
-        keyBody = JSON.parse(keyBody)
-        let pubKey = RSA.getPublicKey(keyBody.publickey_mod, keyBody.publickey_exp)
-        let password = RSA.encrypt(this.password, pubKey)
-        const code = await this.get2faCode(this.serectKey)
-        let loginParams = {
-          password,
-          username: this.username,
-          twofactorcode: code,
-          emailauth: '',
-          loginfriendlyname: '',
-          captchagid: -1,
-          captcha_text: '',
-          emailsteamid: '',
-          rsatimestamp: keyBody.timestamp,
-          remember_login: true,
-          donotcache: new Date().getTime()
-        }
-        console.log('登录参数获取完毕')
-        request.post(
-          LOGIN_URL,
-          {
-            form: loginParams,
-            proxy: 'http://127.0.0.1:1080'
-          },
-          async (loginErr, loginResponse, loginBody) => {
-            if (loginErr) {
-              reject(loginErr)
-            }
-            try {
-              loginBody = JSON.parse(loginBody)
-              let transfer = await this.transfer(loginBody['transfer_urls'][1], loginBody['transfer_parameters'])
-              let transfer0 = await this.transfer(loginBody['transfer_urls'][0], loginBody['transfer_parameters'])
-              console.log('开始获取cookie')
-              request.get('https://steamcommunity.com/', {proxy: 'http://127.0.0.1:1080'}, (err, response, body) => {
-                this.cookie = {}
-                console.log('获取cookie完毕')
-                this.getCookie(loginResponse.headers)
-                this.getCookie(transfer.headers)
-                this.getCookie(transfer0.headers)
-                this.getCookie(response.headers)
-                this.getCookie(keyResponse.headers)
-                this.cookie[`steamMachineAuth${this.steamId}`] = this.machineAuth
-                this.cookie.webTradeEligibility = encodeURIComponent(JSON.stringify({
-                  allowed: 1,
-                  'allowed_at_time': 0,
-                  'steamguard_required_days': 15,
-                  'new_device_cooldown_days': 7,
-                  'time_checked': parseInt((+new Date()) / 1000)
-                }))
-                let str = []
-                Object.keys(this.cookie).forEach(k => {
-                  str.push(`${k}=${this.cookie[k]}`)
-                })
-                this.cookieStr = str.join(';')
-                fs.writeFile(path.resolve(__dirname, `../bot/${this.username}.txt`), this.cookieStr, err => {
-                  resolve()
-                })
-              })
-            } catch (err) {
-              console.log('登录异常，重新登录', err)
-              this.login()
-                .then(resolve)
-                .catch(reject)
-            }
-          }
-        )
+    this.loginDep.push({
+      res: resolve,
+      rej: reject
+    })
+    if (!this.isLogin) {
+      this.isLogin = true
+      let cookieStr = fs.readFileSync(path.resolve(__dirname, `../bot/${this.username}.txt`)).toString()
+      if (cookieStr) {
+        this.cookieStr = cookieStr
+        return resolve()
       }
-    )
+      console.log('开始登录')
+      if (!this.username) {
+        reject('need username')
+      }
+      request.post(
+        RSA_URL,
+        {
+          formData: {
+            donotcache: new Date().getTime(),
+            username: this.username
+          },
+          proxy: 'http://127.0.0.1:1080'
+        },
+        async (keyErr, keyResponse, keyBody) => {
+          if (keyErr) {
+            reject(keyErr)
+          }
+          keyBody = JSON.parse(keyBody)
+          let pubKey = RSA.getPublicKey(keyBody.publickey_mod, keyBody.publickey_exp)
+          let password = RSA.encrypt(this.password, pubKey)
+          const code = await this.get2faCode(this.serectKey)
+          let loginParams = {
+            password,
+            username: this.username,
+            twofactorcode: code,
+            emailauth: '',
+            loginfriendlyname: '',
+            captchagid: -1,
+            captcha_text: '',
+            emailsteamid: '',
+            rsatimestamp: keyBody.timestamp,
+            remember_login: true,
+            donotcache: new Date().getTime()
+          }
+          console.log('登录参数获取完毕')
+          request.post(
+            LOGIN_URL,
+            {
+              form: loginParams,
+              proxy: 'http://127.0.0.1:1080'
+            },
+            async (loginErr, loginResponse, loginBody) => {
+              if (loginErr) {
+                reject(loginErr)
+              }
+              try {
+                loginBody = JSON.parse(loginBody)
+                let transfer = null
+                let transfer0 = null
+                if (loginBody['transfer_urls']) {
+                  transfer = await this.transfer(loginBody['transfer_urls'][1], loginBody['transfer_parameters'])
+                  transfer0 = await this.transfer(loginBody['transfer_urls'][0], loginBody['transfer_parameters'])
+                }
+                console.log('开始获取cookie')
+                request.get('https://steamcommunity.com/', {proxy: 'http://127.0.0.1:1080'}, (err, response, body) => {
+                  this.cookie = {}
+                  console.log('获取cookie完毕')
+                  this.getCookie(loginResponse.headers)
+                  if (transfer) {
+                    this.getCookie(transfer.headers)
+                  }
+                  if (transfer0) {
+                    this.getCookie(transfer0.headers)
+                  }
+                  this.getCookie(response.headers)
+                  this.getCookie(keyResponse.headers)
+                  this.cookie[`steamMachineAuth${this.steamId}`] = this.machineAuth
+                  this.cookie.webTradeEligibility = encodeURIComponent(JSON.stringify({
+                    allowed: 1,
+                    'allowed_at_time': 0,
+                    'steamguard_required_days': 15,
+                    'new_device_cooldown_days': 7,
+                    'time_checked': parseInt((+new Date()) / 1000)
+                  }))
+                  let str = []
+                  Object.keys(this.cookie).forEach(k => {
+                    str.push(`${k}=${this.cookie[k]}`)
+                  })
+                  this.cookieStr = str.join(';')
+                  fs.writeFile(path.resolve(__dirname, `../bot/${this.username}.txt`), this.cookieStr, err => {
+                    this.loginDep.forEach(dep => dep.res())
+                    this.isLogin = false
+                  })
+                })
+              } catch (err) {
+                console.log('登录异常，重新登录', err)
+                this.login()
+              }
+            }
+          )
+        }
+      )
+    }
   })
 }
 
@@ -367,7 +383,6 @@ Steam.prototype.fetchAllConfirms = function fetchAllConfirms() {
   function parseHtml(htmlTxt) {
     let invalid = /Invalid authenticator/.test(htmlTxt)
     if (invalid) {
-      console.log('invalid')
       return false
     }
     const $ = cheerio.load(htmlTxt)
@@ -393,9 +408,12 @@ Steam.prototype.fetchAllConfirms = function fetchAllConfirms() {
           }
           let confirms = parseHtml((body))
           if (!confirms) {
-            this.fetchAllConfirms()
-              .then(gRes)
-              .catch(gRej)
+            console.log('获取确认列表invalid，1s后重试')
+            setTimeout(() => {
+              this.fetchAllConfirms()
+                .then(gRes)
+                .catch(gRej)
+            }, 1000)
           } else {
             let promises = []
             for (let i = 0, l = confirms.length; i < l; i++) {
